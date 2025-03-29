@@ -13,7 +13,7 @@ import argparse
 import glob
 import re
 from typing import List, Optional, Tuple
-import anthropic
+import openai
 import time
 from tqdm import tqdm
 import logging
@@ -39,19 +39,22 @@ OVERLAP_SIZE = 200     # Characters for context overlap
 class MarkdownTranslator:
     """Class to handle translating markdown files to Korean."""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """Initialize the translator with API key."""
         # Load from .env file first
         load_dotenv()
         
         # Use provided key, then environment variable
         if api_key is None:
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            api_key = os.environ.get("OPENAI_API_KEY")
             if api_key is None:
-                raise ValueError("ANTHROPIC_API_KEY not found in environment or .env file and not provided")
+                raise ValueError("OPENAI_API_KEY not found in environment or .env file and not provided")
         
-        self.client = anthropic.Anthropic(api_key=api_key)
-        logger.info("Translator initialized")
+        # Set the model to use
+        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
+        
+        self.client = openai.OpenAI(api_key=api_key)
+        logger.info(f"Translator initialized with model: {self.model}")
     
     def split_markdown(self, content: str) -> List[str]:
         """Split markdown content into manageable chunks while preserving structure."""
@@ -99,31 +102,28 @@ class MarkdownTranslator:
         return chunks
     
     def translate_text(self, text: str) -> str:
-        """Translate text to Korean using Claude."""
+        """Translate text to Korean using OpenAI's GPT model."""
         retries = 3
         backoff = 2  # seconds
         
         for attempt in range(retries):
             try:
-                response = self.client.messages.create(
-                    model="claude-3-opus-20240229",
+                response = self.client.chat.completions.create(
+                    model=self.model,
                     max_tokens=4096,
                     messages=[
                         {
+                            "role": "system",
+                            "content": "You are a professional translator specializing in technical documentation. Translate markdown text to Korean while preserving all markdown formatting and structure exactly. Do not translate code blocks, variable names, function names, placeholder text in brackets, or technical terms."
+                        },
+                        {
                             "role": "user",
-                            "content": f"""Translate the following markdown text to Korean. 
-Preserve all markdown formatting and structure exactly (including headings, lists, code blocks, links, etc.).
-Only translate the actual content text, NOT code in code blocks, variable names, function names, 
-placeholder text in brackets like {{variable}}, or technical terms that should remain in English.
-
-Here is the markdown text to translate:
-
-{text}"""
+                            "content": f"Translate this markdown text to Korean:\n\n{text}"
                         }
                     ]
                 )
                 
-                translated_text = response.content[0].text
+                translated_text = response.choices[0].message.content
                 return translated_text
             
             except Exception as e:
@@ -226,12 +226,14 @@ def main():
     parser.add_argument("-o", "--output", help="Output file path (for single file translation)")
     parser.add_argument("-r", "--recursive", action="store_true", 
                         help="Process directories recursively (default: True)")
-    parser.add_argument("-k", "--api-key", help="Anthropic API key (optional, defaults to environment variable)")
+    parser.add_argument("-k", "--api-key", help="OpenAI API key (optional, defaults to environment variable)")
+    parser.add_argument("-m", "--model", default="gpt-3.5-turbo",
+                       help="OpenAI model to use (default: gpt-3.5-turbo)")
     
     args = parser.parse_args()
     
     # Initialize translator
-    translator = MarkdownTranslator(api_key=args.api_key)
+    translator = MarkdownTranslator(api_key=args.api_key, model=args.model)
     
     # Process the input
     if args.file:

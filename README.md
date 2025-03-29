@@ -18,24 +18,44 @@ A Python application for translating Markdown files to Korean. This tool preserv
    cd ai-translater
    ```
 
-2. Install required dependencies:
+2. Set up a virtual environment (recommended):
    ```
+   # On Windows
+   setup-venv.bat
+   
+   # On Linux/Mac
+   bash setup-venv.sh
+   ```
+   
+   Or manually:
+   ```
+   # On Windows
+   python -m venv venv
+   venv\Scripts\activate
+   pip install -r requirements.txt
+   
+   # On Linux/Mac
+   python3 -m venv venv
+   source venv/bin/activate
    pip install -r requirements.txt
    ```
 
-3. Set your Anthropic API key in the `.env` file:
+3. Set your OpenAI API key in the `.env` file:
    ```
    # Edit the .env file in the project directory
-   ANTHROPIC_API_KEY=your_api_key_here
+   OPENAI_API_KEY=your_api_key_here
+   OPENAI_MODEL=gpt-3.5-turbo  # or another model of your choice
    ```
    
    Alternatively, you can set it as an environment variable:
    ```
    # Windows
-   set ANTHROPIC_API_KEY=your_api_key_here
+   set OPENAI_API_KEY=your_api_key_here
+   set OPENAI_MODEL=gpt-3.5-turbo
    
    # Linux/Mac
-   export ANTHROPIC_API_KEY=your_api_key_here
+   export OPENAI_API_KEY=your_api_key_here
+   export OPENAI_MODEL=gpt-3.5-turbo
    ```
 
 ## Usage
@@ -74,6 +94,12 @@ python translator.py -d path/to/directory -r
 python translator.py -f path/to/file.md -k your_api_key_here
 ```
 
+### Specify a different OpenAI model:
+
+```bash
+python translator.py -f path/to/file.md -m gpt-4
+```
+
 ## Advanced Configuration
 
 You can modify the following constants in the script to adjust the chunking behavior:
@@ -85,7 +111,7 @@ You can modify the following constants in the script to adjust the chunking beha
 
 - The translator skips files that already have the "_ko" suffix to avoid translating already translated files.
 - Code blocks, variable names, function names, and technical terms are preserved in English.
-- The translation uses Claude 3 Opus model for optimal quality and accuracy.
+- The translation uses OpenAI's GPT-3.5-turbo model by default, but you can specify other models.
 
 ## License
 
