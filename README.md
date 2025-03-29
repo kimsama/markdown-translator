@@ -68,6 +68,22 @@ python translator.py -f path/to/file.md
 
 The translated file will be saved as `path/to/file_ko.md`
 
+## Memory-Optimized Version
+
+For large files or when processing many files, you can use the memory-optimized version:
+
+```bash
+python translator_optimized.py -f path/to/file.md
+```
+
+The optimized version handles large files more efficiently by:
+- Processing files in smaller chunks
+- Reducing memory usage
+- Adding more robust error handling
+- Writing translated content to disk immediately
+
+All commands that work with `translator.py` also work with `translator_optimized.py`.
+
 ### Translate with a specific output path:
 
 ```bash
@@ -88,6 +104,14 @@ This will translate all `.md` files in the directory and save them with the '_ko
 python translator.py -d path/to/directory -r
 ```
 
+### Run in debug mode without performing actual translations:
+
+```bash
+python translator.py -f path/to/file.md --debug
+```
+
+Debug mode processes the file through all steps but doesn't make any API calls for translation. This is useful for testing file handling, especially with large files, without incurring OpenAI API costs. The output file will contain placeholder text instead of actual translations.
+
 ### Provide API key via command line:
 
 ```bash
@@ -106,6 +130,25 @@ You can modify the following constants in the script to adjust the chunking beha
 
 - `MAX_CHUNK_SIZE`: Maximum size of each chunk in characters (default: 8000)
 - `OVERLAP_SIZE`: Size of the overlap between chunks for context (default: 200)
+
+### Additional Options in the Optimized Version
+
+The optimized version offers additional customization via command line:
+
+```bash
+# Change the chunk size (in characters)
+python translator_optimized.py -f path/to/file.md --chunk-size 4000
+
+# Run in debug mode (test without making API calls)
+python translator_optimized.py -f path/to/file.md --debug
+```
+
+The optimized version also includes:
+
+- `MAX_BLOCK_SIZE`: Default block size for reading files (20KB)
+- `MIN_BLOCK_SIZE`: Minimum block size for very large files (4KB)
+
+These values are automatically adjusted based on file size but can be modified in the script if needed.
 
 ## Notes
 

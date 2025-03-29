@@ -1,0 +1,19 @@
+
+
+Python app that can translate Markdown files to Korean, handling large files by splitting them into manageable chunks.
+
+Key Features:
+  - Translate individual markdown files to Korean
+  - Process an entire directory of markdown files at once
+  - Preserve all markdown formatting and structure
+  - Handle large files by automatically splitting them into chunks
+  - Output files with '_ko' suffix
+  - Preserves markdown formatting including headers, lists, code blocks, tables, etc.
+  - Doesn't translate code blocks or technical terms
+  - Works with individual files or directories (recursively if needed)
+  - Adds '_ko' suffix to translated files
+  - Error handling with retries and logging
+  - Progress tracking with tqdm
+
+OpenAI API key is stored in .env file. 
+

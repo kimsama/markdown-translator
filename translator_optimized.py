@@ -40,6 +40,8 @@ logger = logging.getLogger("markdown-translator")
 # Constants
 MAX_CHUNK_SIZE = 8000  # Characters
 OVERLAP_SIZE = 200     # Characters for context overlap
+MAX_BLOCK_SIZE = 20 * 1024  # Default block size for reading (20KB)
+MIN_BLOCK_SIZE = 4 * 1024   # Minimum block size for very large files (4KB)
 
 
 class ProgressTracker:
@@ -145,7 +147,7 @@ class ProgressTracker:
 class MarkdownTranslator:
     """Class to handle translating markdown files to Korean."""
     
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, debug_mode: bool = False):
         """Initialize the translator with API key."""
         # Load from .env file first
         load_dotenv()
@@ -159,17 +161,69 @@ class MarkdownTranslator:
         # Set the model to use
         self.model = model or os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
         
+        # Debug mode for testing
+        self.debug_mode = debug_mode
+        if debug_mode:
+            logger.info("Running in DEBUG mode - no actual translation will be performed")
+        
         self.client = openai.OpenAI(api_key=api_key)
         logger.info(f"Translator initialized with model: {self.model}")
     
+    def _safe_open_output_file(self, file_path: str, mode: str = 'w'):
+        """Open an output file with safe encoding handling."""
+        try:
+            return open(file_path, mode, encoding='utf-8')
+        except Exception as e:
+            logger.error(f"Error opening output file with utf-8 encoding: {e}")
+            try:
+                return open(file_path, mode, encoding='utf-8-sig')
+            except Exception as e:
+                logger.error(f"Error opening output file with utf-8-sig encoding: {e}")
+                # Last resort, try with default system encoding
+                return open(file_path, mode)
+    
     def read_file_in_chunks(self, file_path: str, chunk_size: int = 1024*1024) -> Generator[str, None, None]:
         """Read a file in chunks to avoid loading the entire file into memory."""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            while True:
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                yield data
+        encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+        
+        for encoding in encodings_to_try:
+            try:
+                logger.info(f"Trying to read file with encoding: {encoding}")
+                with open(file_path, 'r', encoding=encoding) as f:
+                    chunk_count = 0
+                    last_position = -1
+                    while True:
+                        logger.info(f"Reading chunk {chunk_count+1} from file")
+                        current_position = f.tell()
+                        
+                        # Safety check for infinite loop
+                        if current_position == last_position:
+                            logger.warning(f"File reading stuck at position {current_position}, breaking")
+                            break
+                        
+                        last_position = current_position
+                        data = f.read(chunk_size)
+                        if not data:
+                            logger.info(f"Finished reading file, read {chunk_count} chunks with encoding {encoding}")
+                            break
+                        chunk_count += 1
+                        logger.info(f"Read chunk {chunk_count} with {len(data)} characters ({encoding})")
+                        yield data
+                # If we get here, we successfully read the file
+                return
+            except UnicodeDecodeError as e:
+                logger.error(f"Error reading file {file_path} with encoding {encoding}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Unexpected error reading file {file_path} with encoding {encoding}: {e}")
+                logger.exception("Exception details:")
+                # Try the next encoding
+                continue
+        
+        # If we get here, we failed with all encodings
+        error_msg = f"Could not read file {file_path} with any of the attempted encodings: {encodings_to_try}"
+        logger.error(error_msg)
+        raise IOError(error_msg)
     
     def get_file_size(self, file_path: str) -> int:
         """Get the size of a file in bytes."""
@@ -177,51 +231,94 @@ class MarkdownTranslator:
     
     def split_markdown(self, content: str) -> List[str]:
         """Split markdown content into manageable chunks while preserving structure."""
-        if len(content) <= MAX_CHUNK_SIZE:
-            return [content]
-        
-        chunks = []
-        current_pos = 0
-        
-        # Try to split at markdown section boundaries where possible
-        section_patterns = [
-            r'\n## ', r'\n### ', r'\n#### ', r'\n##### ', r'\n###### ',
-            r'\n\n', r'\n---\n', r'\n\*\*\*\n'
-        ]
-        
-        while current_pos < len(content):
-            # Determine end position for current chunk
-            end_pos = min(current_pos + MAX_CHUNK_SIZE, len(content))
+        try:
+            logger.info(f"Splitting markdown content of {len(content)} characters")
+            if len(content) <= MAX_CHUNK_SIZE:
+                logger.info("Content fits in a single chunk, returning as is")
+                return [content]
             
-            # If we're not at the end of the content, try to find a good split point
-            if end_pos < len(content):
-                # Look for good split points
-                best_split = end_pos
-                for pattern in section_patterns:
-                    # Find the last occurrence of the pattern before the max chunk size
-                    content_slice = content[current_pos:end_pos]
-                    matches = list(re.finditer(pattern, content_slice))
-                    if matches:
-                        last_match = matches[-1]
-                        potential_split = current_pos + last_match.start() + 1
-                        if potential_split > current_pos:  # Ensure we're making progress
-                            best_split = potential_split
-                            break
+            chunks = []
+            current_pos = 0
+            last_end_pos = -1  # Track the last ending position to detect infinite loops
+            
+            # Try to split at markdown section boundaries where possible
+            section_patterns = [
+                r'\n## ', r'\n### ', r'\n#### ', r'\n##### ', r'\n###### ',
+                r'\n\n', r'\n---\n', r'\n\*\*\*\n'
+            ]
+            
+            while current_pos < len(content):
+                # Determine end position for current chunk
+                end_pos = min(current_pos + MAX_CHUNK_SIZE, len(content))
+                logger.info(f"Processing chunk from position {current_pos} to {end_pos}")
                 
-                end_pos = best_split
+                # If we're not at the end of the content, try to find a good split point
+                if end_pos < len(content):
+                    # Look for good split points
+                    best_split = end_pos
+                    for pattern in section_patterns:
+                        # Find the last occurrence of the pattern before the max chunk size
+                        content_slice = content[current_pos:end_pos]
+                        matches = list(re.finditer(pattern, content_slice))
+                        if matches:
+                            last_match = matches[-1]
+                            potential_split = current_pos + last_match.start() + 1
+                            if potential_split > current_pos:  # Ensure we're making progress
+                                best_split = potential_split
+                                logger.info(f"Found good split point at position {best_split} using pattern {pattern}")
+                                break
+                    
+                    end_pos = best_split
+                
+                # Extract the chunk
+                chunk = content[current_pos:end_pos]
+                logger.info(f"Adding chunk of size {len(chunk)} characters")
+                chunks.append(chunk)
+                
+                # Check for infinite loop - if we're not making progress, force move forward
+                if end_pos <= last_end_pos:
+                    logger.warning(f"Detected potential infinite loop at position {current_pos}. Forcing move forward.")
+                    # Force move beyond the current position
+                    current_pos = last_end_pos + MAX_CHUNK_SIZE // 2
+                else:
+                    # Move position for next chunk, with some overlap for context
+                    next_pos = max(current_pos, end_pos - OVERLAP_SIZE)
+                    # Ensure we're making progress (at least 100 characters)
+                    if next_pos < current_pos + 100:
+                        next_pos = current_pos + 100
+                    current_pos = next_pos
+                
+                last_end_pos = end_pos
+                logger.info(f"Moving to position {current_pos} for next chunk (with overlap)")
             
-            # Extract the chunk
-            chunk = content[current_pos:end_pos]
-            chunks.append(chunk)
-            
-            # Move position for next chunk, with some overlap for context
-            current_pos = max(current_pos, end_pos - OVERLAP_SIZE)
-        
-        logger.info(f"Split content into {len(chunks)} chunks")
-        return chunks
+            logger.info(f"Split content into {len(chunks)} chunks")
+            return chunks
+        except Exception as e:
+            logger.error(f"Error in split_markdown: {e}")
+            logger.exception("Exception details:")
+            # Fallback: if something goes wrong, just split by size
+            try:
+                logger.info("Falling back to simple chunk splitting")
+                chunks = []
+                current_pos = 0
+                while current_pos < len(content):
+                    end_pos = min(current_pos + MAX_CHUNK_SIZE, len(content))
+                    chunks.append(content[current_pos:end_pos])
+                    current_pos = end_pos  # Ensure we're making progress
+                logger.info(f"Split content into {len(chunks)} chunks using fallback method")
+                return chunks
+            except Exception as nested_e:
+                logger.error(f"Error in fallback splitting: {nested_e}")
+                # Ultimate fallback: return the whole content
+                return [content]
     
     def translate_text(self, text: str) -> str:
         """Translate text to Korean using OpenAI's GPT model."""
+        # In debug mode, just return the original text
+        if self.debug_mode:
+            logger.info("DEBUG MODE: Skipping actual translation")
+            return f"[DEBUG MODE] This would be translated: {text[:100]}..."
+            
         retries = 3
         backoff = 2  # seconds
         
@@ -256,136 +353,190 @@ class MarkdownTranslator:
     
     def translate_markdown_file(self, input_path: str, output_path: Optional[str] = None) -> str:
         """Translate a single markdown file to Korean with memory optimizations."""
-        # Determine output path if not provided
-        if output_path is None:
-            base, ext = os.path.splitext(input_path)
-            output_path = f"{base}_ko{ext}"
-        
-        file_size = self.get_file_size(input_path)
-        logger.info(f"Translating {input_path} to {output_path} (File size: {file_size/1024:.2f} KB)")
-        
-        # For large files, process in chunks to avoid memory issues
-        if file_size > 1024 * 1024:  # If file is larger than 1MB
-            logger.info("Large file detected, using streaming approach")
-            with open(output_path, 'w', encoding='utf-8') as out_file:
-                # Estimate total chunks for progress bar
-                estimated_chunks = max(1, int(file_size / (MAX_CHUNK_SIZE * 0.8)))
+        try:
+            # Determine output path if not provided
+            if output_path is None:
+                base, ext = os.path.splitext(input_path)
+                output_path = f"{base}_ko{ext}"
+            
+            file_size = self.get_file_size(input_path)
+            logger.info(f"Translating {input_path} to {output_path} (File size: {file_size/1024:.2f} KB)")
+            
+            # For large files, process in chunks to avoid memory issues
+            if file_size > 20 * 1024:  # If file is larger than 200KB
+                logger.info("Large file detected, using streaming approach")
+                try:
+                    # Estimate total chunks for progress bar
+                    estimated_chunks = max(1, int(file_size / (MAX_CHUNK_SIZE * 0.8)))
+                    logger.info(f"Estimated number of chunks: {estimated_chunks}")
+                    
+                    # Initialize progress tracker
+                    progress = ProgressTracker(estimated_chunks, file_size, input_path)
+                    
+                    # Adjust block size based on file size
+                    # For very large files, use smaller blocks to avoid memory issues
+                    if file_size > 1024 * 1024:  # > 1MB
+                        block_size = MIN_BLOCK_SIZE  # 4KB for very large files
+                        overlap_size = 100  # Smaller overlap for large files
+                    else:
+                        block_size = MAX_BLOCK_SIZE  # 20KB for medium files
+                        overlap_size = OVERLAP_SIZE  # Normal overlap
+                    
+                    logger.info(f"Using block size of {block_size} bytes and overlap of {overlap_size} chars for reading")
+                    current_block = ""
+                    processed_chunks = 0
+                    
+                    # Open output file for writing
+                    with self._safe_open_output_file(output_path, 'w') as out_file:
+                        logger.info("Starting to process file in blocks")
+                        try:
+                            for block in self.read_file_in_chunks(input_path, block_size):
+                                logger.info(f"Processing block with {len(block)} characters")
+                                current_block += block
+                                logger.info(f"Current block size after appending: {len(current_block)} characters")
+                                
+                                # Process as many complete chunks as possible from current block
+                                while len(current_block) >= MAX_CHUNK_SIZE:  # Process when we have at least one chunk worth of content
+                                    logger.info(f"Splitting current block (size: {len(current_block)}) into chunks")
+                                    chunks = self.split_markdown(current_block[:int(MAX_CHUNK_SIZE * 1.5)])  # Process the beginning
+                                    chunk = chunks[0]  # Take just the first chunk
+                                    logger.info(f"Got first chunk with {len(chunk)} characters")
+                                    
+                                    logger.info(f"Translating chunk {processed_chunks+1} ({len(chunk)} chars)")
+                                    print(f"\nTranslating chunk {processed_chunks+1}/{estimated_chunks} ({len(chunk)} chars)")
+                                    translated_chunk = self.translate_text(chunk)
+                                    # Add a newline if the translated chunk doesn't end with one
+                                    if translated_chunk and not translated_chunk.endswith('\n'):
+                                        translated_chunk += '\n'
+                                    out_file.write(translated_chunk)
+                                    out_file.flush()  # Ensure content is written to disk
+                                    
+                                    # Remove the processed chunk, keeping some overlap
+                                    if len(chunk) > overlap_size:
+                                        current_block = current_block[len(chunk)-overlap_size:]
+                                    else:
+                                        current_block = current_block[len(chunk):]
+                                    
+                                    # Force garbage collection after each chunk
+                                    processed_chunks += 1
+                                    gc.collect()
+                                    
+                                    # Update progress
+                                    progress.update(1, len(chunk))
+                                    print_progress_bar(processed_chunks, estimated_chunks, 
+                                                     prefix=f'Progress', 
+                                                     suffix=f'Chunk {processed_chunks}/{estimated_chunks}', 
+                                                     length=40)
+                                    
+                                    # Small delay to avoid rate limiting
+                                    time.sleep(1)
+                                    
+                                    # Free memory
+                                    del translated_chunk
+                                    del chunks
+                                    gc.collect()
+                                    
+                                    # Break out if block gets too big to avoid memory issues
+                                    if len(current_block) > MAX_CHUNK_SIZE * 2:
+                                        logger.warning("Current block too large, breaking to process next block")
+                                        break
+                            
+                            # Process any remaining text in the current block
+                            if current_block:
+                                logger.info(f"Processing remaining text block of size {len(current_block)}")
+                                chunks = self.split_markdown(current_block)
+                                for i, chunk in enumerate(chunks):
+                                    logger.info(f"Translating final chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+                                    translated_chunk = self.translate_text(chunk)
+                                    # Add a newline if the translated chunk doesn't end with one
+                                    if translated_chunk and not translated_chunk.endswith('\n'):
+                                        translated_chunk += '\n'
+                                    out_file.write(translated_chunk)
+                                    out_file.flush()  # Ensure content is written to disk
+                                    
+                                    # Update progress
+                                    progress.update(1, len(chunk))
+                                    
+                                    # Small delay to avoid rate limiting
+                                    if i < len(chunks) - 1:
+                                        time.sleep(1)
+                                    
+                                    del translated_chunk
+                                    gc.collect()
+                        
+                        except Exception as e:
+                            logger.error(f"Error processing blocks: {e}")
+                            logger.exception("Exception details:")
+                            print(f"Error processing blocks: {e}")
+                            raise
+                    
+                    # Close progress tracker and display final stats outside of the file handling
+                    progress.close()
+                
+                except Exception as e:
+                    logger.error(f"Error in translate_markdown_file: {e}")
+                    logger.exception("Exception details:")
+                    print(f"Error processing file: {e}")
+                    raise
+            else:
+                # For smaller files, use the original approach but with better memory management
+                with open(input_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Split content into manageable chunks if needed
+                chunks = self.split_markdown(content)
+                total_chars = len(content)
+                del content  # Free memory
+                gc.collect()
                 
                 # Initialize progress tracker
-                progress = ProgressTracker(estimated_chunks, file_size, input_path)
+                progress = ProgressTracker(len(chunks), total_chars, input_path)
                 
-                # Read and process file in large blocks
-                block_size = 1024 * 1024  # 1MB blocks for reading
-                current_block = ""
-                processed_chunks = 0
-                
-                for block in self.read_file_in_chunks(input_path, block_size):
-                    current_block += block
-                    
-                    # Process as many complete chunks as possible from current block
-                    while len(current_block) >= MAX_CHUNK_SIZE * 1.5:  # Ensure we have enough text to form a good chunk
-                        chunks = self.split_markdown(current_block[:MAX_CHUNK_SIZE * 2])  # Process the beginning
-                        chunk = chunks[0]  # Take just the first chunk
-                        
-                        logger.info(f"Translating chunk {processed_chunks+1} ({len(chunk)} chars)")
-                        print(f"\nTranslating chunk {processed_chunks+1}/{estimated_chunks} ({len(chunk)} chars)")
-                        translated_chunk = self.translate_text(chunk)
-                        out_file.write(translated_chunk)
-                        out_file.flush()  # Ensure content is written to disk
-                        
-                        # Remove the processed chunk, keeping some overlap
-                        if len(chunk) > OVERLAP_SIZE:
-                            current_block = current_block[len(chunk)-OVERLAP_SIZE:]
-                        else:
-                            current_block = current_block[len(chunk):]
-                        
-                        processed_chunks += 1
-                        
-                        # Update progress
-                        progress.update(1, len(chunk))
-                        print_progress_bar(processed_chunks, estimated_chunks, 
-                                         prefix=f'Progress', 
-                                         suffix=f'Chunk {processed_chunks}/{estimated_chunks}', 
-                                         length=40)
-                        
-                        # Small delay to avoid rate limiting
-                        time.sleep(1)
-                        
-                        # Force garbage collection
-                        del translated_chunk
-                        gc.collect()
-                
-                # Process any remaining text
-                if current_block:
-                    chunks = self.split_markdown(current_block)
+                # Open the output file for immediate writing
+                with self._safe_open_output_file(output_path, 'w') as out_file:
+                    # Translate each chunk
                     for i, chunk in enumerate(chunks):
-                        logger.info(f"Translating final chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+                        logger.info(f"Translating chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+                        print(f"\nTranslating chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
                         translated_chunk = self.translate_text(chunk)
+                        
+                        # Write each chunk as it's translated
+                        # Add a newline if the translated chunk doesn't end with one
+                        if translated_chunk and not translated_chunk.endswith('\n'):
+                            translated_chunk += '\n'
                         out_file.write(translated_chunk)
+                        out_file.flush()
                         
                         # Update progress
                         progress.update(1, len(chunk))
+                        print_progress_bar(i+1, len(chunks),
+                                         prefix=f'Progress',
+                                         suffix=f'Chunk {i+1}/{len(chunks)}',
+                                         length=40)
                         
                         # Small delay to avoid rate limiting
                         if i < len(chunks) - 1:
                             time.sleep(1)
                         
+                        # Clean up memory
+                        del chunk
                         del translated_chunk
                         gc.collect()
                 
-                # Close progress tracker and display final stats
+                # Close progress tracker
                 progress.close()
-        else:
-            # For smaller files, use the original approach but with better memory management
-            with open(input_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+                
+                # Clean up
+                del chunks
+                gc.collect()
             
-            # Split content into manageable chunks if needed
-            chunks = self.split_markdown(content)
-            total_chars = len(content)
-            del content  # Free memory
-            gc.collect()
-            
-            # Initialize progress tracker
-            progress = ProgressTracker(len(chunks), total_chars, input_path)
-            
-            # Open the output file for immediate writing
-            with open(output_path, 'w', encoding='utf-8') as out_file:
-                # Translate each chunk
-                for i, chunk in enumerate(chunks):
-                    logger.info(f"Translating chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-                    print(f"\nTranslating chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-                    translated_chunk = self.translate_text(chunk)
-                    
-                    # Write each chunk as it's translated
-                    out_file.write(translated_chunk)
-                    out_file.flush()
-                    
-                    # Update progress
-                    progress.update(1, len(chunk))
-                    print_progress_bar(i+1, len(chunks),
-                                     prefix=f'Progress',
-                                     suffix=f'Chunk {i+1}/{len(chunks)}',
-                                     length=40)
-                    
-                    # Small delay to avoid rate limiting
-                    if i < len(chunks) - 1:
-                        time.sleep(1)
-                    
-                    # Clean up memory
-                    del chunk
-                    del translated_chunk
-                    gc.collect()
-            
-            # Close progress tracker
-            progress.close()
-            
-            # Clean up
-            del chunks
-            gc.collect()
-        
-        logger.info(f"Translation completed: {output_path}")
-        return output_path
+            logger.info(f"Translation completed: {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Error in translate_markdown_file: {e}")
+            logger.exception("Exception details:")
+            print(f"Error processing file: {e}")
+            raise
     
     def translate_directory(self, directory_path: str, recursive: bool = True) -> List[str]:
         """Translate all markdown files in a directory."""
@@ -477,6 +628,8 @@ def main():
                        help="OpenAI model to use (default: gpt-3.5-turbo)")
     parser.add_argument("--chunk-size", type=int, default=8000,
                        help=f"Maximum chunk size in characters (default: {MAX_CHUNK_SIZE})")
+    parser.add_argument("--debug", action="store_true",
+                       help="Run in debug mode without actual translation (for testing)")
     
     args = parser.parse_args()
     
@@ -499,7 +652,7 @@ def main():
     print("=" * 60 + "\n")
     
     # Initialize translator
-    translator = MarkdownTranslator(api_key=args.api_key, model=args.model)
+    translator = MarkdownTranslator(api_key=args.api_key, model=args.model, debug_mode=args.debug)
     
     # Process the input
     if args.file:
