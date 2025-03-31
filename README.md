@@ -112,6 +112,22 @@ python translator.py -f path/to/file.md --debug
 
 Debug mode processes the file through all steps but doesn't make any API calls for translation. This is useful for testing file handling, especially with large files, without incurring OpenAI API costs. The output file will contain placeholder text instead of actual translations.
 
+### Control logging verbosity:
+
+```bash
+python translator_optimized.py -f path/to/file.md -v
+```
+
+By default, the translator shows only a clean progress bar with minimal distraction. This "quiet mode" hides processing details, warnings about chunk splitting, and other technical logs.
+
+Use the `-v` or `--verbose` flag to see detailed logs about:
+- File reading and encoding detection
+- Markdown chunk splitting and processing
+- Warnings about potential issues
+- Detailed progress information
+
+The verbose mode is useful for debugging or monitoring the translation process in detail.
+
 ### Provide API key via command line:
 
 ```bash
