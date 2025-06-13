@@ -63,37 +63,27 @@ A Python application for translating Markdown files to Korean. This tool preserv
 ### Translate a single file:
 
 ```bash
-python translator.py -f path/to/file.md
+python translator_optimized.py -f path/to/file.md
 ```
 
 The translated file will be saved as `path/to/file_ko.md`
 
-## Memory-Optimized Version
-
-For large files or when processing many files, you can use the memory-optimized version:
-
-```bash
-python translator_optimized.py -f path/to/file.md
-```
-
-The optimized version handles large files more efficiently by:
+The translator handles large files efficiently by:
 - Processing files in smaller chunks
 - Reducing memory usage
-- Adding more robust error handling
+- Adding robust error handling
 - Writing translated content to disk immediately
-
-All commands that work with `translator.py` also work with `translator_optimized.py`.
 
 ### Translate with a specific output path:
 
 ```bash
-python translator.py -f path/to/file.md -o path/to/output.md
+python translator_optimized.py -f path/to/file.md -o path/to/output.md
 ```
 
 ### Translate all markdown files in a directory:
 
 ```bash
-python translator.py -d path/to/directory
+python translator_optimized.py -d path/to/directory
 ```
 
 This will translate all `.md` files in the directory and save them with the '_ko' suffix.
@@ -101,13 +91,13 @@ This will translate all `.md` files in the directory and save them with the '_ko
 ### Translate recursively (including subdirectories):
 
 ```bash
-python translator.py -d path/to/directory -r
+python translator_optimized.py -d path/to/directory -r
 ```
 
 ### Run in debug mode without performing actual translations:
 
 ```bash
-python translator.py -f path/to/file.md --debug
+python translator_optimized.py -f path/to/file.md --debug
 ```
 
 Debug mode processes the file through all steps but doesn't make any API calls for translation. This is useful for testing file handling, especially with large files, without incurring OpenAI API costs. The output file will contain placeholder text instead of actual translations.
@@ -131,13 +121,13 @@ The verbose mode is useful for debugging or monitoring the translation process i
 ### Provide API key via command line:
 
 ```bash
-python translator.py -f path/to/file.md -k your_api_key_here
+python translator_optimized.py -f path/to/file.md -k your_api_key_here
 ```
 
 ### Specify a different OpenAI model:
 
 ```bash
-python translator.py -f path/to/file.md -m gpt-4
+python translator_optimized.py -f path/to/file.md -m gpt-4
 ```
 
 ## Advanced Configuration
