@@ -20,6 +20,7 @@ import math
 import sys
 from typing import List, Optional, Generator, Tuple
 import openai
+import anthropic
 from tqdm import tqdm
 import logging
 import sys
@@ -38,7 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger("markdown-translator")
 
 # Set httpx and other third-party loggers to a higher level to silence them by default
-for module in ['httpx', 'urllib3', 'openai']:
+for module in ['httpx', 'urllib3', 'openai', 'anthropic']:
     logging.getLogger(module).setLevel(logging.WARNING)
 
 # Constants
@@ -99,12 +100,12 @@ def set_verbose_mode(verbose: bool):
     if verbose:
         console_handler.setLevel(logging.INFO)  # Show INFO level logs in console
         # In verbose mode, allow httpx and other libraries logs
-        for module in ['httpx', 'urllib3', 'openai']:
+        for module in ['httpx', 'urllib3', 'openai', 'anthropic']:
             logging.getLogger(module).setLevel(logging.INFO)
     else:
         console_handler.setLevel(logging.WARNING)  # Only show warnings and errors
         # In non-verbose mode, silence httpx and other libraries logs
-        for module in ['httpx', 'urllib3', 'openai']:
+        for module in ['httpx', 'urllib3', 'openai', 'anthropic']:
             logging.getLogger(module).setLevel(logging.WARNING)
         
     logger.info(f"Verbose mode is {'enabled' if verbose else 'disabled'}")
@@ -357,27 +358,48 @@ class ProgressTracker:
 class MarkdownTranslator:
     """Class to handle translating markdown files to Korean."""
     
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, debug_mode: bool = False):
-        """Initialize the translator with API key."""
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, debug_mode: bool = False, api_provider: Optional[str] = None):
+        """Initialize the translator with API key and provider."""
         # Load from .env file first
         load_dotenv()
         
+        # Determine API provider
+        self.api_provider = api_provider or os.environ.get("API_PROVIDER", "openai").lower()
+        
+        # Set default models based on provider
+        if self.api_provider == "anthropic":
+            default_model = "claude-3-haiku-20240307"
+            api_key_env = "ANTHROPIC_API_KEY"
+        else:
+            default_model = "gpt-3.5-turbo"
+            api_key_env = "OPENAI_API_KEY"
+        
         # Use provided key, then environment variable
         if api_key is None:
-            api_key = os.environ.get("OPENAI_API_KEY")
+            api_key = os.environ.get(api_key_env)
             if api_key is None:
-                raise ValueError("OPENAI_API_KEY not found in environment or .env file and not provided")
+                raise ValueError(f"{api_key_env} not found in environment or .env file and not provided")
         
-        # Set the model to use
-        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
+        # Set the model to use - check provider-specific env vars first
+        if model:
+            self.model = model
+        elif self.api_provider == "anthropic":
+            self.model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("MODEL", default_model)
+        else:
+            self.model = os.environ.get("OPENAI_MODEL") or os.environ.get("MODEL", default_model)
         
         # Debug mode for testing
         self.debug_mode = debug_mode
         if debug_mode:
             logger.info("Running in DEBUG mode - no actual translation will be performed")
         
-        self.client = openai.OpenAI(api_key=api_key)
-        #logger.info(f"Translator initialized with model: {self.model}")
+        # Initialize the appropriate client
+        if self.api_provider == "anthropic":
+            self.client = anthropic.Anthropic(api_key=api_key)
+        else:
+            self.client = openai.OpenAI(api_key=api_key)
+        
+        logger.info(f"Translator initialized with {self.api_provider} provider and model: {self.model}")
     
     def _safe_open_output_file(self, file_path: str, mode: str = 'w'):
         """Open an output file with safe encoding handling."""
@@ -531,7 +553,7 @@ class MarkdownTranslator:
                 return [content]
     
     def translate_text(self, text: str) -> str:
-        """Translate text to Korean using OpenAI's GPT model."""
+        """Translate text to Korean using the configured API provider."""
         # In debug mode, just return the original text
         if self.debug_mode:
             logger.info("DEBUG MODE: Skipping actual translation")
@@ -542,22 +564,35 @@ class MarkdownTranslator:
         
         for attempt in range(retries):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    max_tokens=4096,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a professional translator specializing in technical documentation. Translate markdown text to Korean while preserving all markdown formatting and structure exactly. Do not translate code blocks, variable names, function names, placeholder text in brackets, or technical terms."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Translate this markdown text to Korean:\n\n{text}"
-                        }
-                    ]
-                )
+                if self.api_provider == "anthropic":
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=4096,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"You are a professional translator specializing in technical documentation. Translate markdown text to Korean while preserving all markdown formatting and structure exactly. Do not translate code blocks, variable names, function names, placeholder text in brackets, or technical terms.\n\nTranslate this markdown text to Korean:\n\n{text}"
+                            }
+                        ]
+                    )
+                    translated_text = response.content[0].text
+                else:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        max_tokens=4096,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a professional translator specializing in technical documentation. Translate markdown text to Korean while preserving all markdown formatting and structure exactly. Do not translate code blocks, variable names, function names, placeholder text in brackets, or technical terms."
+                            },
+                            {
+                                "role": "user",
+                                "content": f"Translate this markdown text to Korean:\n\n{text}"
+                            }
+                        ]
+                    )
+                    translated_text = response.choices[0].message.content
                 
-                translated_text = response.choices[0].message.content
                 return translated_text
             
             except Exception as e:
@@ -918,9 +953,11 @@ def main():
     parser.add_argument("-o", "--output", help="Output file path (for single file translation)")
     parser.add_argument("-r", "--recursive", action="store_true", 
                         help="Process directories recursively (default: True)")
-    parser.add_argument("-k", "--api-key", help="OpenAI API key (optional, defaults to environment variable)")
-    parser.add_argument("-m", "--model", default="gpt-3.5-turbo",
-                       help="OpenAI model to use (default: gpt-3.5-turbo)")
+    parser.add_argument("-k", "--api-key", help="API key (optional, defaults to environment variable)")
+    parser.add_argument("-m", "--model", 
+                       help="Model to use (defaults: gpt-3.5-turbo for OpenAI, claude-3-haiku-20240307 for Anthropic)")
+    parser.add_argument("--provider", choices=["openai", "anthropic"], default="openai",
+                       help="API provider to use (default: openai)")
     parser.add_argument("--chunk-size", type=int, default=8000,
                        help=f"Maximum chunk size in characters (default: {MAX_CHUNK_SIZE})")
     parser.add_argument("--debug", action="store_true",
@@ -942,7 +979,8 @@ def main():
     print(f"Markdown Korean Translator (Memory-Optimized)")
     print("=" * 60)
     print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Using model: {args.model}")
+    print(f"Using provider: {args.provider}")
+    print(f"Using model: {args.model or ('gpt-3.5-turbo' if args.provider == 'openai' else 'claude-3-haiku-20240307')}")
     print(f"Chunk size: {MAX_CHUNK_SIZE} characters")
     if args.file:
         file_size = os.path.getsize(args.file) / 1024  # KB
@@ -952,7 +990,7 @@ def main():
     print("=" * 60 + "\n")
     
     # Initialize translator
-    translator = MarkdownTranslator(api_key=args.api_key, model=args.model, debug_mode=args.debug)
+    translator = MarkdownTranslator(api_key=args.api_key, model=args.model, debug_mode=args.debug, api_provider=args.provider)
     
     # Process the input
     if args.file:

@@ -28,6 +28,10 @@ python translator.py -d directory/ -r
 python translator_optimized.py -f file.md -v
 python translator_optimized.py -d directory/ -r --chunk-size 4000
 
+# Using different API providers
+python translator_optimized.py -f file.md --provider openai
+python translator_optimized.py -f file.md --provider anthropic
+
 # Convenience scripts
 bash translate.sh -f file.md           # Linux/Mac
 translate-optimized.bat -f file.md     # Windows
@@ -66,12 +70,29 @@ python translator_optimized.py -f file.md -v
 
 ## Environment Configuration
 
-API key setup options:
-1. `.env` file: `OPENAI_API_KEY=your_key_here`
-2. Environment variable: `export OPENAI_API_KEY=your_key_here`
-3. Command line: `-k your_key_here`
+### API Provider Selection
+The application now supports both OpenAI and Anthropic APIs. Configure in `.env` file:
 
-Model selection: `OPENAI_MODEL=gpt-4` or `-m gpt-4`
+```bash
+# Choose API provider
+API_PROVIDER=openai  # or "anthropic"
+
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-3.5-turbo
+
+# Anthropic Configuration
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+ANTHROPIC_MODEL=claude-3-haiku-20240307
+
+# General model override (optional)
+MODEL=gpt-3.5-turbo
+```
+
+### Command Line Options
+- API key: `-k your_key_here` (optional, defaults to environment variable)
+- Provider: `--provider openai` or `--provider anthropic`
+- Model: `-m model_name` (overrides environment defaults)
 
 ## Important Development Notes
 
@@ -80,3 +101,5 @@ Model selection: `OPENAI_MODEL=gpt-4` or `-m gpt-4`
 - All file operations include comprehensive encoding fallback chains
 - Progress tracking includes verbose/quiet modes for different use cases
 - Error handling includes exponential backoff for API calls and multiple fallback strategies
+- Both OpenAI and Anthropic APIs are supported with automatic provider detection
+- Default models: gpt-3.5-turbo (OpenAI), claude-3-haiku-20240307 (Anthropic)

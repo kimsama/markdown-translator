@@ -1,10 +1,11 @@
 # Markdown Korean Translator
 
-A Python application for translating Markdown files to Korean. This tool preserves markdown formatting while translating content, and handles large files by splitting them into manageable chunks.
+A Python application for translating Markdown files to Korean using OpenAI or Anthropic APIs. This tool preserves markdown formatting while translating content, and handles large files by splitting them into manageable chunks.
 
 ## Features
 
 - Translate individual markdown files to Korean
+- Support for both OpenAI and Anthropic APIs
 - Process an entire directory of markdown files at once
 - Preserve all markdown formatting and structure
 - Handle large files by automatically splitting them into chunks
@@ -40,22 +41,32 @@ A Python application for translating Markdown files to Korean. This tool preserv
    pip install -r requirements.txt
    ```
 
-3. Set your OpenAI API key in the `.env` file:
+3. Configure your API provider and keys in the `.env` file:
    ```
-   # Edit the .env file in the project directory
-   OPENAI_API_KEY=your_api_key_here
-   OPENAI_MODEL=gpt-3.5-turbo  # or another model of your choice
+   # Copy .env.example to .env and edit:
+   cp .env.example .env
+   
+   # Choose your preferred API provider
+   API_PROVIDER=openai  # or "anthropic"
+   
+   # For OpenAI (get key from https://platform.openai.com/)
+   OPENAI_API_KEY=your_openai_api_key_here
+   OPENAI_MODEL=gpt-3.5-turbo
+   
+   # For Anthropic (get key from https://console.anthropic.com/)
+   ANTHROPIC_API_KEY=your_anthropic_api_key_here
+   ANTHROPIC_MODEL=claude-3-haiku-20240307
    ```
    
-   Alternatively, you can set it as an environment variable:
+   Alternatively, you can set environment variables:
    ```
    # Windows
+   set API_PROVIDER=openai
    set OPENAI_API_KEY=your_api_key_here
-   set OPENAI_MODEL=gpt-3.5-turbo
    
    # Linux/Mac
-   export OPENAI_API_KEY=your_api_key_here
-   export OPENAI_MODEL=gpt-3.5-turbo
+   export API_PROVIDER=anthropic
+   export ANTHROPIC_API_KEY=your_api_key_here
    ```
 
 ## Usage
@@ -63,7 +74,12 @@ A Python application for translating Markdown files to Korean. This tool preserv
 ### Translate a single file:
 
 ```bash
+# Using default provider from .env
 python translator_optimized.py -f path/to/file.md
+
+# Using specific API provider
+python translator_optimized.py -f path/to/file.md --provider openai
+python translator_optimized.py -f path/to/file.md --provider anthropic
 ```
 
 The translated file will be saved as `path/to/file_ko.md`
@@ -100,7 +116,7 @@ python translator_optimized.py -d path/to/directory -r
 python translator_optimized.py -f path/to/file.md --debug
 ```
 
-Debug mode processes the file through all steps but doesn't make any API calls for translation. This is useful for testing file handling, especially with large files, without incurring OpenAI API costs. The output file will contain placeholder text instead of actual translations.
+Debug mode processes the file through all steps but doesn't make any API calls for translation. This is useful for testing file handling, especially with large files, without incurring API costs. The output file will contain placeholder text instead of actual translations.
 
 ### Control logging verbosity:
 
@@ -121,13 +137,23 @@ The verbose mode is useful for debugging or monitoring the translation process i
 ### Provide API key via command line:
 
 ```bash
-python translator_optimized.py -f path/to/file.md -k your_api_key_here
+# OpenAI
+python translator_optimized.py -f path/to/file.md --provider openai -k your_openai_key
+
+# Anthropic
+python translator_optimized.py -f path/to/file.md --provider anthropic -k your_anthropic_key
 ```
 
-### Specify a different OpenAI model:
+### Specify a different model:
 
 ```bash
-python translator_optimized.py -f path/to/file.md -m gpt-4
+# OpenAI models
+python translator_optimized.py -f path/to/file.md --provider openai -m gpt-4
+python translator_optimized.py -f path/to/file.md --provider openai -m gpt-4o
+
+# Anthropic models
+python translator_optimized.py -f path/to/file.md --provider anthropic -m claude-3-5-sonnet-20241022
+python translator_optimized.py -f path/to/file.md --provider anthropic -m claude-3-5-haiku-20241022
 ```
 
 ## Advanced Configuration
@@ -137,9 +163,9 @@ You can modify the following constants in the script to adjust the chunking beha
 - `MAX_CHUNK_SIZE`: Maximum size of each chunk in characters (default: 8000)
 - `OVERLAP_SIZE`: Size of the overlap between chunks for context (default: 200)
 
-### Additional Options in the Optimized Version
+### Additional Options
 
-The optimized version offers additional customization via command line:
+The translator offers additional customization via command line:
 
 ```bash
 # Change the chunk size (in characters)
@@ -147,6 +173,9 @@ python translator_optimized.py -f path/to/file.md --chunk-size 4000
 
 # Run in debug mode (test without making API calls)
 python translator_optimized.py -f path/to/file.md --debug
+
+# Specify API provider and model
+python translator_optimized.py -f path/to/file.md --provider anthropic -m claude-3-5-sonnet-20241022
 ```
 
 The optimized version also includes:
@@ -156,11 +185,25 @@ The optimized version also includes:
 
 These values are automatically adjusted based on file size but can be modified in the script if needed.
 
+## API Providers
+
+### OpenAI
+- **Default model**: gpt-3.5-turbo
+- **Other models**: gpt-4, gpt-4o, gpt-4-turbo-preview
+- **Get API key**: https://platform.openai.com/
+
+### Anthropic
+- **Default model**: claude-3-haiku-20240307
+- **Other models**: claude-3-5-haiku-20241022, claude-3-5-sonnet-20241022
+- **Get API key**: https://console.anthropic.com/
+- **Note**: Anthropic models appear to be better at preserving code blocks untranslated
+
 ## Notes
 
 - The translator skips files that already have the "_ko" suffix to avoid translating already translated files.
 - Code blocks, variable names, function names, and technical terms are preserved in English.
-- The translation uses OpenAI's GPT-3.5-turbo model by default, but you can specify other models.
+- Both OpenAI and Anthropic APIs are supported with automatic provider detection.
+- Default models are automatically selected based on the chosen provider.
 
 ## License
 
